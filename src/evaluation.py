@@ -327,3 +327,115 @@ def generate_evaluation_report(results: Dict[str, Any]) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Fairness / bias metrics
+# ---------------------------------------------------------------------------
+
+
+def compute_adverse_impact_ratio(
+    pass_rates: Dict[str, float],
+    reference_group: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compute the Adverse Impact Ratio (AIR) across demographic groups.
+
+    The AIR (also called the "four-fifths rule") compares the pass rate of
+    each group to the highest-performing group.  An AIR below 0.80 is
+    generally considered evidence of adverse impact under US EEOC guidelines.
+
+    .. note::
+        This metric is purely statistical.  A low AIR does not prove
+        intentional discrimination, but flags potential disparate impact
+        that warrants further investigation.
+
+    Args:
+        pass_rates: Dict mapping group names to pass rates (0–1).
+            Example: ``{"Group A": 0.60, "Group B": 0.45, "Group C": 0.72}``
+        reference_group: Group to use as the denominator.  If ``None``,
+            the group with the highest pass rate is used automatically.
+
+    Returns:
+        Dict with per-group AIR values, the reference group used, and a
+        boolean ``flagged`` field set to ``True`` if any group falls below
+        the 0.80 threshold.
+
+    Raises:
+        ValueError: If *pass_rates* is empty or contains negative values.
+    """
+    if not pass_rates:
+        raise ValueError("pass_rates must contain at least one group")
+    for group, rate in pass_rates.items():
+        if rate < 0 or rate > 1:
+            raise ValueError(
+                f"Pass rate for '{group}' is {rate} — must be in [0, 1]"
+            )
+
+    if reference_group is not None:
+        if reference_group not in pass_rates:
+            raise ValueError(f"Reference group '{reference_group}' not in pass_rates")
+        ref_rate = pass_rates[reference_group]
+    else:
+        reference_group = max(pass_rates, key=pass_rates.get)  # type: ignore[arg-type]
+        ref_rate = pass_rates[reference_group]
+
+    air_values: Dict[str, float] = {}
+    flagged = False
+
+    for group, rate in pass_rates.items():
+        if ref_rate > 0:
+            air = round(rate / ref_rate, 4)
+        else:
+            air = 0.0 if rate == 0 else 1.0
+        air_values[group] = air
+        if air < 0.80 and group != reference_group:
+            flagged = True
+
+    return {
+        "air_values": air_values,
+        "reference_group": reference_group,
+        "reference_rate": ref_rate,
+        "threshold": 0.80,
+        "flagged": flagged,
+    }
+
+
+def compute_score_parity(
+    group_scores: Dict[str, List[float]],
+) -> Dict[str, Any]:
+    """Check whether mean scores are roughly equal across groups.
+
+    Computes the mean score per group and flags disparities exceeding
+    a configurable tolerance (default 0.10).
+
+    Args:
+        group_scores: Dict mapping group names to lists of composite
+            scores for candidates in that group.
+
+    Returns:
+        Dict with per-group mean scores, the overall mean, max disparity,
+        and a ``flagged`` field.
+    """
+    if not group_scores:
+        return {"means": {}, "overall_mean": 0.0, "max_disparity": 0.0, "flagged": False}
+
+    means: Dict[str, float] = {}
+    all_scores: List[float] = []
+
+    for group, scores in group_scores.items():
+        if scores:
+            means[group] = round(sum(scores) / len(scores), 4)
+            all_scores.extend(scores)
+        else:
+            means[group] = 0.0
+
+    overall = round(sum(all_scores) / len(all_scores), 4) if all_scores else 0.0
+    values = [m for m in means.values() if m > 0]
+    disparity = round(max(values) - min(values), 4) if len(values) >= 2 else 0.0
+
+    return {
+        "means": means,
+        "overall_mean": overall,
+        "max_disparity": disparity,
+        "flagged": disparity > 0.10,
+    }
