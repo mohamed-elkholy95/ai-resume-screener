@@ -275,3 +275,96 @@ def categorize_skill(skill: str) -> str:
             if canonical in skills:
                 return category
     return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Proficiency levels
+# ---------------------------------------------------------------------------
+
+PROFICIENCY_LEVELS: dict[str, int] = {
+    "beginner": 1,
+    "intermediate": 2,
+    "advanced": 3,
+    "expert": 4,
+}
+
+# Keyword patterns that hint at proficiency in resume text
+PROFICIENCY_INDICATORS: dict[str, list[str]] = {
+    "expert": [
+        "expert in", "mastery of", "deep expertise", "led development of",
+        "architected", "extensive experience with", "8+ years",
+    ],
+    "advanced": [
+        "advanced knowledge", "proficient in", "strong experience",
+        "5+ years", "designed and implemented", "production experience",
+    ],
+    "intermediate": [
+        "familiar with", "working knowledge", "2+ years",
+        "contributed to", "used in projects",
+    ],
+    "beginner": [
+        "basic knowledge", "coursework in", "learning",
+        "introductory", "exposure to",
+    ],
+}
+
+
+def infer_proficiency(skill: str, context: str) -> str:
+    """Infer the proficiency level for a skill based on surrounding context.
+
+    Scans the text around a skill mention for proficiency indicator phrases.
+    Returns the highest matching level, defaulting to ``"intermediate"`` when
+    no indicators are found (a conservative middle-ground assumption).
+
+    Args:
+        skill: Canonical skill name.
+        context: Resume text (or a relevant excerpt).
+
+    Returns:
+        One of ``"beginner"``, ``"intermediate"``, ``"advanced"``, ``"expert"``.
+    """
+    lower_context = context.lower()
+
+    # Check from highest to lowest proficiency
+    for level in ("expert", "advanced", "intermediate", "beginner"):
+        for indicator in PROFICIENCY_INDICATORS[level]:
+            # Look for the indicator near the skill mention
+            if indicator in lower_context and skill.lower() in lower_context:
+                return level
+
+    return "intermediate"
+
+
+def compute_skill_coverage(
+    resume_skills: list[str],
+    jd_required: list[str],
+    jd_preferred: list[str],
+) -> dict[str, float]:
+    """Compute category-level skill coverage between resume and JD.
+
+    Groups both the candidate's skills and the JD's requirements by
+    taxonomy category, then computes the coverage ratio per category.
+
+    Args:
+        resume_skills: Skills extracted from resume.
+        jd_required: Required skills from the job description.
+        jd_preferred: Preferred skills from the job description.
+
+    Returns:
+        Dict mapping category names to coverage ratios (0–1).
+    """
+    # Gather all JD skills by category
+    jd_all = [s.lower() for s in jd_required + jd_preferred]
+    resume_set = {s.lower() for s in resume_skills}
+
+    category_needs: dict[str, list[str]] = {}
+    for skill in jd_all:
+        cat = categorize_skill(skill)
+        category_needs.setdefault(cat, []).append(skill)
+
+    coverage: dict[str, float] = {}
+    for cat, needed in category_needs.items():
+        matched = sum(1 for s in needed if s in resume_set)
+        coverage[cat] = round(matched / len(needed), 4) if needed else 1.0
+
+    return coverage
