@@ -1,11 +1,17 @@
-"""Shared utility helpers for the AI Resume Screener."""
+"""Shared utility helpers for the AI Resume Screener.
+
+Provides text normalisation, file I/O, score formatting, and text-analysis
+utilities used across the matching, scoring, and evaluation pipelines.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
 import unicodedata
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -243,3 +249,90 @@ def format_score(score: float, as_percent: bool = True, decimals: int = 1) -> st
     if as_percent:
         return f"{score * 100:.{decimals}f}%"
     return f"{score:.{decimals + 2}f}"
+
+
+# ---------------------------------------------------------------------------
+# Text statistics
+# ---------------------------------------------------------------------------
+
+
+def text_stats(text: str) -> Dict[str, Any]:
+    """Compute basic statistics about a text document.
+
+    Useful for resume quality checks — extremely short or long documents
+    often indicate parsing errors.
+
+    Args:
+        text: Input text.
+
+    Returns:
+        Dict with ``char_count``, ``word_count``, ``line_count``,
+        ``avg_word_length``, and ``unique_word_ratio``.
+    """
+    if not text:
+        return {
+            "char_count": 0,
+            "word_count": 0,
+            "line_count": 0,
+            "avg_word_length": 0.0,
+            "unique_word_ratio": 0.0,
+        }
+    words = text.split()
+    word_count = len(words)
+    unique_words = set(w.lower() for w in words)
+    avg_len = sum(len(w) for w in words) / word_count if word_count else 0.0
+
+    return {
+        "char_count": len(text),
+        "word_count": word_count,
+        "line_count": text.count("\n") + 1,
+        "avg_word_length": round(avg_len, 2),
+        "unique_word_ratio": round(len(unique_words) / word_count, 4) if word_count else 0.0,
+    }
+
+
+def keyword_density(text: str, keywords: List[str]) -> Dict[str, float]:
+    """Calculate the density of each keyword in the text.
+
+    Density = (occurrences of keyword / total words) × 100.
+
+    Args:
+        text: Source text.
+        keywords: List of keywords to check (case-insensitive).
+
+    Returns:
+        Dict mapping each keyword to its density percentage.
+    """
+    if not text or not keywords:
+        return {kw: 0.0 for kw in keywords}
+
+    lower_text = text.lower()
+    total_words = max(len(lower_text.split()), 1)
+    densities: Dict[str, float] = {}
+
+    for kw in keywords:
+        # Count non-overlapping occurrences (case-insensitive)
+        pattern = re.compile(r"\b" + re.escape(kw.lower()) + r"\b")
+        count = len(pattern.findall(lower_text))
+        densities[kw] = round((count / total_words) * 100, 4)
+
+    return densities
+
+
+def jaccard_similarity(set_a: set, set_b: set) -> float:
+    """Compute Jaccard similarity between two sets.
+
+    Jaccard = |A ∩ B| / |A ∪ B|.  Returns 0.0 when both sets are empty.
+
+    Args:
+        set_a: First set.
+        set_b: Second set.
+
+    Returns:
+        Similarity score in [0, 1].
+    """
+    if not set_a and not set_b:
+        return 0.0
+    intersection = len(set_a & set_b)
+    union = len(set_a | set_b)
+    return round(intersection / union, 4) if union else 0.0
