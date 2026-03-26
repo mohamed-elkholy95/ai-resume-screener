@@ -167,3 +167,91 @@ class TestBatchScoring:
         # Scores should be non-increasing (sorted descending)
         scores = [r[1] for r in results]
         assert scores == sorted(scores, reverse=True)
+
+
+class TestGapAnalysis:
+    """Test the skill gap analysis and recommendation engine."""
+
+    def test_no_gaps_when_fully_matched(self, matcher):
+        resume = Resume(
+            raw_text="Senior engineer",
+            filename="full_match.pdf",
+            skills=["python", "tensorflow", "docker", "aws", "kubernetes"],
+            experience_years=5.0,
+        )
+        jd = JobDescription(
+            raw_text="We need python and tensorflow",
+            title="ML Engineer",
+            required_skills=["python", "tensorflow"],
+            preferred_skills=["docker"],
+        )
+        analysis = matcher.generate_gap_analysis(resume, jd)
+        assert analysis["critical_gaps"] == []
+        assert analysis["gap_severity"] == "low"
+        assert analysis["matched_count"] == 2
+
+    def test_critical_gaps_detected(self, matcher, sample_jd):
+        resume = Resume(
+            raw_text="Junior dev",
+            filename="gaps.pdf",
+            skills=["java", "spring"],
+            experience_years=1.0,
+        )
+        analysis = matcher.generate_gap_analysis(resume, sample_jd)
+        assert len(analysis["critical_gaps"]) > 0
+        assert analysis["gap_severity"] == "high"
+        assert any(r["priority"] == "high" for r in analysis["recommendations"])
+
+    def test_transferable_skills_detected(self, matcher):
+        """When a candidate has PyTorch but the JD requires TensorFlow,
+        the gap analysis should flag PyTorch as a transferable skill."""
+        resume = Resume(
+            raw_text="ML engineer with pytorch",
+            filename="transfer.pdf",
+            skills=["python", "pytorch"],
+            experience_years=3.0,
+        )
+        jd = JobDescription(
+            raw_text="Need TensorFlow experience",
+            title="ML Engineer",
+            required_skills=["python", "tensorflow"],
+            preferred_skills=[],
+        )
+        analysis = matcher.generate_gap_analysis(resume, jd)
+        # pytorch → tensorflow should appear as transferable
+        assert any("pytorch" in t.lower() for t in analysis["transferable_skills"])
+
+    def test_medium_severity_with_few_gaps(self, matcher):
+        resume = Resume(
+            raw_text="Developer",
+            filename="medium.pdf",
+            skills=["python", "docker"],
+            experience_years=4.0,
+        )
+        jd = JobDescription(
+            raw_text="Need python, docker, and aws",
+            title="DevOps Engineer",
+            required_skills=["python", "docker", "aws"],
+            preferred_skills=["kubernetes"],
+        )
+        analysis = matcher.generate_gap_analysis(resume, jd)
+        # Only 1 missing required skill → medium severity
+        assert analysis["gap_severity"] == "medium"
+        assert len(analysis["critical_gaps"]) == 1
+
+    def test_recommendations_include_preferred(self, matcher):
+        resume = Resume(
+            raw_text="Engineer",
+            filename="recs.pdf",
+            skills=["python"],
+            experience_years=2.0,
+        )
+        jd = JobDescription(
+            raw_text="Need python, nice to have docker",
+            title="Backend Engineer",
+            required_skills=["python"],
+            preferred_skills=["docker", "kubernetes"],
+        )
+        analysis = matcher.generate_gap_analysis(resume, jd)
+        priorities = [r["priority"] for r in analysis["recommendations"]]
+        assert "medium" in priorities  # preferred gaps get medium priority
