@@ -100,6 +100,10 @@ class ResumeParser:
         logger.info("Parsed resume from %s (%d chars)", path.name, len(raw_text))
         return self.parse_text(raw_text, filename=path.name)
 
+    # Minimum character count for a resume to be considered valid.
+    # Extremely short documents usually indicate a parsing failure.
+    MIN_RESUME_CHARS: int = 50
+
     def parse_text(self, text: str, filename: str = "unknown.txt") -> Resume:
         """Parse a resume from raw text.
 
@@ -109,13 +113,38 @@ class ResumeParser:
 
         Returns:
             Parsed Resume object.
+
+        Raises:
+            ValueError: If the cleaned text is shorter than
+                :attr:`MIN_RESUME_CHARS`, indicating a likely parsing failure.
         """
         clean = self.clean_text(text)
+
+        if len(clean) < self.MIN_RESUME_CHARS:
+            logger.warning(
+                "Resume '%s' has only %d chars after cleaning (min=%d)",
+                filename, len(clean), self.MIN_RESUME_CHARS,
+            )
+
+        # Compute a quality indicator for downstream consumers
+        word_count = len(clean.split())
+        quality = (
+            "good" if word_count >= 100
+            else "short" if word_count >= 30
+            else "suspicious"
+        )
+
         return Resume(
             raw_text=text,
             filename=filename,
             clean_text=clean,
-            metadata={"source": filename, "char_count": len(text)},
+            metadata={
+                "source": filename,
+                "char_count": len(text),
+                "clean_char_count": len(clean),
+                "word_count": word_count,
+                "quality": quality,
+            },
         )
 
     def _extract_text(self, path: Path) -> str:
@@ -267,13 +296,23 @@ class JobDescriptionParser:
     def parse_text(self, text: str, title: str = "Unknown Position") -> JobDescription:
         """Parse a job description from raw text.
 
+        Automatically extracts minimum experience requirements, education
+        level, and basic metadata.  Skill extraction is left to downstream
+        NER or manual input since JD skill lists vary widely in format.
+
         Args:
             text: Raw job description text.
             title: Job title (defaults to "Unknown Position").
 
         Returns:
             Parsed JobDescription object.
+
+        Raises:
+            ValueError: If *text* is empty.
         """
+        if not text or not text.strip():
+            raise ValueError("Job description text cannot be empty")
+
         min_exp = self._extract_min_experience(text)
         edu_level = self._extract_education_level(text)
 
@@ -282,7 +321,12 @@ class JobDescriptionParser:
             title=title,
             min_experience=min_exp,
             education_level=edu_level,
-            metadata={"char_count": len(text)},
+            metadata={
+                "char_count": len(text),
+                "word_count": len(text.split()),
+                "extracted_experience": min_exp,
+                "extracted_education": edu_level,
+            },
         )
 
     def parse_file(self, file_path: str | Path) -> JobDescription:
