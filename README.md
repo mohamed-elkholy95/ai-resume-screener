@@ -44,23 +44,53 @@ streamlit run streamlit_app/app.py
 
 ## Scoring Formula
 
+The composite score combines four dimensions with configurable weights:
+
 ```
-overall_score = (skill_score × 0.5) + (experience_score × 0.3) + (education_score × 0.2)
-skill_score    = (required_score × 0.7) + (preferred_score × 0.3)
+composite = (skill × 0.40) + (experience × 0.30) + (education × 0.20) + (semantic × 0.10)
+skill_score = (required_match × 0.70) + (preferred_match × 0.30)
 ```
+
+### Scoring Profiles
+
+| Profile            | Skills | Experience | Education | Semantic |
+|--------------------|--------|------------|-----------|----------|
+| **default**        | 40%    | 30%        | 20%       | 10%      |
+| **skills_heavy**   | 55%    | 20%        | 15%       | 10%      |
+| **experience_heavy** | 30%  | 45%        | 15%       | 10%      |
+| **balanced**       | 30%    | 30%        | 20%       | 20%      |
+
+Select a profile at scorer initialisation or pass custom weights.
+
+## Fairness & Bias Auditing
+
+Automated screening systems carry inherent bias risks. This project includes:
+
+- **Adverse Impact Ratio (AIR)** — implements the EEOC four-fifths rule to detect disparate impact across demographic groups
+- **Score Parity Analysis** — flags mean-score disparities exceeding 10 percentage points between groups
+- **PII Masking** — emails and phone numbers are masked during text cleaning to reduce identity-based bias
+
+> ⚠️ These metrics surface statistical patterns — they do not prove discrimination. Always combine with human review.
 
 ## Project Structure
 
 ```
 ├── src/
-│   ├── api/main.py              # FastAPI endpoints
-│   ├── config.py                # Scoring weights & thresholds
-│   ├── matcher.py               # Skill matching engine
-│   ├── scorer.py                # Multi-dimensional scoring
-│   ├── extractor.py             # NER entity extraction
-│   └── evaluation.py            # Decision pipeline
-├── streamlit_app/pages/         # 5 dashboard pages
-├── tests/                       # 84 tests
+│   ├── api/
+│   │   ├── main.py              # FastAPI application
+│   │   └── schemas.py           # Pydantic request/response models
+│   ├── config.py                # Scoring weights, profiles & thresholds
+│   ├── matcher.py               # Skill matching + gap analysis
+│   ├── scorer.py                # Multi-dimensional scoring & ranking
+│   ├── ner_extractor.py         # NER entity extraction (spaCy + patterns)
+│   ├── classifier.py            # ML classifiers (LR / RF / BERT)
+│   ├── evaluation.py            # NER, classification, ranking & fairness metrics
+│   ├── skill_taxonomy.py        # Canonical skill database & fuzzy matching
+│   ├── data_collection.py       # Resume/JD parsing (PDF, DOCX, TXT)
+│   └── utils.py                 # Text processing & scoring helpers
+├── streamlit_app/pages/         # Interactive dashboard
+├── docs/ARCHITECTURE.md         # System design documentation
+├── tests/                       # Comprehensive test suite
 └── requirements.txt
 ```
 
