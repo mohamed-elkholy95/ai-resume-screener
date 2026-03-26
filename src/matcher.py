@@ -233,6 +233,71 @@ class ResumeMatcher:
         # Jaccard fallback
         return self._jaccard_similarity(resume_text, jd_text)
 
+    def generate_gap_analysis(
+        self,
+        resume: Resume,
+        jd: JobDescription,
+    ) -> dict[str, Any]:
+        """Produce a skill-gap analysis with actionable recommendations.
+
+        Goes beyond simple match/miss lists by categorising gaps into
+        priority tiers and suggesting concrete learning paths.
+
+        Args:
+            resume: Parsed Resume object.
+            jd: Parsed JobDescription object.
+
+        Returns:
+            Dict with ``critical_gaps`` (missing required skills),
+            ``nice_to_have_gaps`` (missing preferred skills),
+            ``transferable_skills`` (candidate skills adjacent to requirements),
+            and ``recommendations`` (prioritised learning suggestions).
+        """
+        skill_match = self.compute_skill_match(
+            resume.skills, jd.required_skills, jd.preferred_skills
+        )
+
+        # Identify transferable skills — resume skills in the same taxonomy
+        # category as missing required skills
+        transferable: list[str] = []
+        for missing in skill_match["missing_required"]:
+            for additional in skill_match["additional"]:
+                # Simple heuristic: if both are in the same general domain
+                # (e.g. both are ML frameworks) they're transferable
+                if _skills_related(missing.lower(), additional.lower()):
+                    transferable.append(f"{additional} → {missing}")
+
+        # Build prioritised recommendations
+        recommendations: list[dict[str, str]] = []
+        for i, skill in enumerate(skill_match["missing_required"], 1):
+            recommendations.append({
+                "priority": "high",
+                "skill": skill,
+                "reason": f"Required skill missing — often a dealbreaker in screening",
+                "action": f"Gain hands-on experience with {skill} through projects or certifications",
+            })
+        for skill in skill_match["missing_preferred"][:5]:
+            recommendations.append({
+                "priority": "medium",
+                "skill": skill,
+                "reason": "Preferred skill — strengthens candidacy if acquired",
+                "action": f"Consider learning {skill} to stand out from other candidates",
+            })
+
+        return {
+            "critical_gaps": skill_match["missing_required"],
+            "nice_to_have_gaps": skill_match["missing_preferred"],
+            "transferable_skills": transferable,
+            "matched_count": len(skill_match["matched_required"]),
+            "total_required": len(jd.required_skills),
+            "gap_severity": (
+                "low" if not skill_match["missing_required"]
+                else "medium" if len(skill_match["missing_required"]) <= 2
+                else "high"
+            ),
+            "recommendations": recommendations,
+        }
+
     def batch_score_resumes(
         self,
         resumes: list[Resume],
@@ -326,3 +391,29 @@ def _get_edu_keywords(level: str) -> list[str]:
         "High School": ["high school", "ged"],
     }
     return mapping.get(level, [])
+
+
+# Skill relatedness clusters — skills in the same cluster are considered
+# transferable when one is missing and the other is present.
+_SKILL_CLUSTERS: list[set[str]] = [
+    {"pytorch", "tensorflow", "keras", "jax", "mxnet"},
+    {"aws", "azure", "google cloud", "gcp"},
+    {"docker", "kubernetes", "podman", "helm"},
+    {"react", "vue", "angular", "svelte"},
+    {"postgresql", "mysql", "sqlite", "mariadb"},
+    {"apache spark", "hadoop", "databricks", "presto"},
+    {"python", "r", "julia"},
+    {"javascript", "typescript"},
+    {"scikit-learn", "xgboost", "lightgbm", "catboost"},
+    {"langchain", "llamaindex", "haystack"},
+    {"jenkins", "github actions", "gitlab ci", "circleci"},
+    {"fastapi", "flask", "django", "express"},
+]
+
+
+def _skills_related(skill_a: str, skill_b: str) -> bool:
+    """Return True if two skills belong to the same technology cluster."""
+    for cluster in _SKILL_CLUSTERS:
+        if skill_a in cluster and skill_b in cluster:
+            return True
+    return False
