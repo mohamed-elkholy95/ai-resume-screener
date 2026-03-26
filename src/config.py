@@ -1,6 +1,15 @@
-"""Global configuration for the AI Resume Screener project."""
+"""Global configuration for the AI Resume Screener project.
 
+Central configuration hub for paths, scoring weights, model settings, and
+API parameters.  All scoring weights are validated at import time to ensure
+they sum to 1.0 (within floating-point tolerance).
+"""
+
+from __future__ import annotations
+
+import math
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -10,10 +19,32 @@ DATA_DIR: Path = PROJECT_ROOT / "data"
 RAW_DIR: Path = DATA_DIR / "raw"
 PROCESSED_DIR: Path = DATA_DIR / "processed"
 MODEL_DIR: Path = DATA_DIR / "models"
+REPORTS_DIR: Path = DATA_DIR / "reports"
 
 # Ensure directories exist at import time
-for _dir in (RAW_DIR, PROCESSED_DIR, MODEL_DIR):
+for _dir in (RAW_DIR, PROCESSED_DIR, MODEL_DIR, REPORTS_DIR):
     _dir.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Weight validation helper
+# ---------------------------------------------------------------------------
+
+def _validate_weights(weights: dict[str, float], name: str = "weights") -> None:
+    """Verify that a weight dictionary sums to 1.0 (±0.001).
+
+    Raises:
+        ValueError: If any weight is negative or if the sum deviates from 1.0.
+    """
+    for key, val in weights.items():
+        if val < 0:
+            raise ValueError(f"{name}['{key}'] is negative ({val})")
+    total = sum(weights.values())
+    if not math.isclose(total, 1.0, abs_tol=1e-3):
+        raise ValueError(
+            f"{name} must sum to 1.0, got {total:.4f}: {weights}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Scoring weights — must sum to 1.0
@@ -24,6 +55,38 @@ MATCH_WEIGHTS: dict[str, float] = {
     "education_match": 0.20,
     "semantic_similarity": 0.10,
 }
+
+_validate_weights(MATCH_WEIGHTS, "MATCH_WEIGHTS")
+
+# ---------------------------------------------------------------------------
+# Pre-built scoring profiles for common hiring scenarios
+# ---------------------------------------------------------------------------
+
+SCORING_PROFILES: dict[str, dict[str, float]] = {
+    "default": MATCH_WEIGHTS,
+    "skills_heavy": {
+        "skill_match": 0.55,
+        "experience_match": 0.20,
+        "education_match": 0.15,
+        "semantic_similarity": 0.10,
+    },
+    "experience_heavy": {
+        "skill_match": 0.30,
+        "experience_match": 0.45,
+        "education_match": 0.15,
+        "semantic_similarity": 0.10,
+    },
+    "balanced": {
+        "skill_match": 0.30,
+        "experience_match": 0.30,
+        "education_match": 0.20,
+        "semantic_similarity": 0.20,
+    },
+}
+
+# Validate every built-in profile at import time
+for _profile_name, _profile_weights in SCORING_PROFILES.items():
+    _validate_weights(_profile_weights, f"SCORING_PROFILES['{_profile_name}']")
 
 # ---------------------------------------------------------------------------
 # Match thresholds (composite score → label)
