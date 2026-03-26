@@ -2,8 +2,10 @@
 import pytest
 import numpy as np
 from src.evaluation import (
+    compute_adverse_impact_ratio,
     compute_classification_metrics,
     compute_ranking_metrics,
+    compute_score_parity,
     generate_evaluation_report,
 )
 
@@ -168,3 +170,77 @@ class TestEvaluationReport:
         assert "Classification" in report
         assert "Ranking" in report
         assert "test" in report
+
+
+class TestAdverseImpactRatio:
+    """Test the EEOC four-fifths rule implementation."""
+
+    def test_equal_pass_rates(self):
+        result = compute_adverse_impact_ratio({"A": 0.60, "B": 0.60})
+        assert result["flagged"] is False
+        assert result["air_values"]["A"] == 1.0
+
+    def test_flagged_when_below_threshold(self):
+        # Group B has 50% pass rate vs Group A's 80% → AIR = 0.625 < 0.80
+        result = compute_adverse_impact_ratio({"A": 0.80, "B": 0.50})
+        assert result["flagged"] is True
+        assert result["air_values"]["B"] < 0.80
+
+    def test_not_flagged_at_boundary(self):
+        # Exactly at 80% of reference → AIR = 0.80, not flagged
+        result = compute_adverse_impact_ratio({"A": 1.0, "B": 0.80})
+        assert result["flagged"] is False
+
+    def test_custom_reference_group(self):
+        result = compute_adverse_impact_ratio(
+            {"A": 0.90, "B": 0.70, "C": 0.60},
+            reference_group="A",
+        )
+        assert result["reference_group"] == "A"
+        assert result["reference_rate"] == 0.90
+
+    def test_auto_selects_highest_pass_rate(self):
+        result = compute_adverse_impact_ratio({"X": 0.40, "Y": 0.90, "Z": 0.70})
+        assert result["reference_group"] == "Y"
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            compute_adverse_impact_ratio({})
+
+    def test_invalid_rate_raises(self):
+        with pytest.raises(ValueError):
+            compute_adverse_impact_ratio({"A": 1.5})
+
+    def test_unknown_reference_group_raises(self):
+        with pytest.raises(ValueError):
+            compute_adverse_impact_ratio({"A": 0.5}, reference_group="Z")
+
+
+class TestScoreParity:
+    """Test score distribution parity across groups."""
+
+    def test_equal_means(self):
+        result = compute_score_parity({
+            "A": [0.80, 0.82, 0.78],
+            "B": [0.79, 0.81, 0.80],
+        })
+        assert result["flagged"] is False
+        assert result["max_disparity"] < 0.10
+
+    def test_flagged_when_large_gap(self):
+        result = compute_score_parity({
+            "High": [0.90, 0.88, 0.92],
+            "Low": [0.50, 0.48, 0.52],
+        })
+        assert result["flagged"] is True
+        assert result["max_disparity"] > 0.10
+
+    def test_empty_groups(self):
+        result = compute_score_parity({})
+        assert result["flagged"] is False
+        assert result["overall_mean"] == 0.0
+
+    def test_single_group(self):
+        result = compute_score_parity({"Only": [0.75, 0.80]})
+        assert result["max_disparity"] == 0.0
+        assert result["flagged"] is False
