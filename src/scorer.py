@@ -1,4 +1,10 @@
-"""Composite scoring, ranking, and report generation for resume screening."""
+"""Composite scoring, ranking, and report generation for resume screening.
+
+The scorer orchestrates the matcher, NER extractor, and optional classifier
+to produce a single composite score per candidate.  Scoring weights are
+configurable via named profiles (see :data:`~src.config.SCORING_PROFILES`)
+or ad-hoc weight dicts.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.config import MATCH_THRESHOLDS, MATCH_WEIGHTS, PROCESSED_DIR
+from src.config import (
+    MATCH_THRESHOLDS,
+    MATCH_WEIGHTS,
+    PROCESSED_DIR,
+    SCORING_PROFILES,
+    _validate_weights,
+)
 from src.data_collection import JobDescription, Resume
 
 logger = logging.getLogger(__name__)
@@ -57,6 +69,8 @@ class ResumeScorer:
         matcher: Any,
         ner: Any,
         classifier: Optional[Any] = None,
+        profile: str = "default",
+        custom_weights: Optional[Dict[str, float]] = None,
     ) -> None:
         """Initialise the scorer.
 
@@ -65,10 +79,33 @@ class ResumeScorer:
             ner: Configured :class:`~src.ner_extractor.ResumeNER` instance.
             classifier: Optional trained :class:`~src.classifier.ResumeClassifier`.
                 If ``None``, ML-based predictions are skipped.
+            profile: Name of a built-in scoring profile from
+                :data:`~src.config.SCORING_PROFILES`.  Ignored when
+                *custom_weights* is provided.
+            custom_weights: Ad-hoc weight dict overriding the profile.
+                Must contain keys ``skill_match``, ``experience_match``,
+                ``education_match``, ``semantic_similarity`` and sum to 1.0.
         """
         self.matcher = matcher
         self.ner = ner
         self.classifier = classifier
+
+        # Resolve scoring weights: custom > profile > default
+        if custom_weights is not None:
+            _validate_weights(custom_weights, "custom_weights")
+            self.weights = custom_weights
+            self.profile_name = "custom"
+        elif profile in SCORING_PROFILES:
+            self.weights = SCORING_PROFILES[profile]
+            self.profile_name = profile
+        else:
+            logger.warning(
+                "Unknown profile '%s' — falling back to 'default'", profile
+            )
+            self.weights = MATCH_WEIGHTS
+            self.profile_name = "default"
+
+        logger.info("ResumeScorer using profile '%s': %s", self.profile_name, self.weights)
 
     # ------------------------------------------------------------------
     # Core scoring
@@ -126,11 +163,13 @@ class ResumeScorer:
             jd.raw_text,
         )
 
+        # Use instance weights (from profile or custom override)
+        w = self.weights
         composite = (
-            skill_result["skill_score"] * MATCH_WEIGHTS["skill_match"]
-            + experience_score * MATCH_WEIGHTS["experience_match"]
-            + education_score * MATCH_WEIGHTS["education_match"]
-            + semantic_score * MATCH_WEIGHTS["semantic_similarity"]
+            skill_result["skill_score"] * w["skill_match"]
+            + experience_score * w["experience_match"]
+            + education_score * w["education_match"]
+            + semantic_score * w["semantic_similarity"]
         )
         composite = round(max(0.0, min(1.0, composite)), 4)
 
@@ -139,13 +178,14 @@ class ResumeScorer:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "composite_score": composite,
             "match_label": get_match_label(composite),
+            "scoring_profile": self.profile_name,
             "component_scores": {
                 "skill_match": round(skill_result["skill_score"], 4),
                 "experience_match": round(experience_score, 4),
                 "education_match": round(education_score, 4),
                 "semantic_similarity": round(semantic_score, 4),
             },
-            "weights": MATCH_WEIGHTS,
+            "weights": w,
             "skill_analysis": {
                 "matched_required": skill_result.get("matched_required", []),
                 "missing_required": skill_result.get("missing_required", []),
